@@ -201,8 +201,19 @@ export interface AddressInfo {
   totalBalance: number;
 }
 
+export interface UnspentInfoScriptPubKey {
+  asm: string;
+  hex: string;
+}
+
 export interface UnspentInfo {
+  amount: number;
   address: string;
+  n: number; // v_out / index
+  script_pub_key: UnspentInfoScriptPubKey;
+  txid: string;
+  value: string;
+  value_int: number;
 }
 
 export interface RecoverParams {
