@@ -82,7 +82,16 @@ export class Btc extends AbstractUtxoCoin {
     }).call(this);
   }
 
-  getUnspentInfoFromExplorer(addressBase58: string): Bluebird<any> {
+  getTransactionHexFromExplorer(txid: string): string {
+    const self = this;
+    return co(function *getAddressInfoFromExplorer() {
+      const txInfo = yield request.get(self.recoveryBlockchainExplorerUrl(`/tx/${txid}/hex`)).result();
+      return txInfo.hex[0].hex;
+    }).call(this);
+  }
+
+  // For BTC the unspent info can e.g. be found here https://api.smartbit.com.au/v1/blockchain/address/3EDynTAW8JFk4Tn8EahnbGzrw1QZUFBCtF/unspent
+  getUnspentInfoFromExplorer(addressBase58: string): Bluebird<UnspentInfo[]> {
     const self = this;
     return co(function *getUnspentInfoFromExplorer() {
       const unspentInfo = yield request.get(self.recoveryBlockchainExplorerUrl(`/address/${addressBase58}/unspent`)).result();

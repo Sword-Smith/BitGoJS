@@ -281,6 +281,13 @@ export abstract class AbstractUtxoCoin extends BaseCoin {
   }
 
   /**
+   * Return dust amount in base units (satoshi/litoshi). Overwrite for specific chain if different than BTC/BCH/BSV.
+   */
+  getDustAmountInSatoshi(): number {
+    return 546;
+  }
+
+  /**
    * Helper to get the version number for an address
    */
   protected getAddressVersion(address: string): number | undefined {
