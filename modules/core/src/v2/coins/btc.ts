@@ -1,7 +1,8 @@
 import { BitGo } from '../../bitgo';
 import { BaseCoin } from '../baseCoin';
-import { AbstractUtxoCoin, UtxoNetwork } from './abstractUtxoCoin';
+import { AbstractUtxoCoin, AddressInfo, UnspentInfo, UtxoNetwork } from './abstractUtxoCoin';
 import * as common from '../../common';
+import { toOutputScript, Transaction, TransactionBuilder } from 'bitcoinjs-lib';
 import * as bitcoin from 'bitgo-utxo-lib';
 import * as request from 'superagent';
 import * as _ from 'lodash';
@@ -123,6 +124,102 @@ export class Btc extends AbstractUtxoCoin {
       }
 
       return transactionDetails;
+    }).call(this);
+  }
+
+  public sendOmniToken(fromAddress: string, toAddress: string, tokenAmount: number, tokenId: number, fundingTxid?: string): Bluebird<any> {
+    const self = this;
+    return co(function* () {
+        if (!self.isValidAddress(fromAddress)){
+          throw new Error(`Invalid fromAddress. Got: ${fromAddress}`);
+        }
+        if (!self.isValidAddress(toAddress)){
+          throw new Error(`Invalid toAddress. Got: ${toAddress}`);
+        }
+
+      let txBuilder: TransactionBuilder = new TransactionBuilder();
+
+      // Add all inputs to the transaction
+      let inputValueInSatoshi: number = 0;
+      if (fundingTxid) {
+        const recipientAddressAsOutputScript: string = toOutputScript(toAddress);
+
+        // Get raw hex from txid and decode the transaction
+        const txHex: string = yield self.getTransactionHexFromExplorer(fundingTxid);
+        const fundingTx = Transaction.fromHex(txHex);
+
+        // Loop over outputs in fundingTxid and select those that are going to `fromAddress` (usually just one output)
+        let vout: number;
+        for (vout = 0; vout < fundingTx.outs.length; vout++) {
+          if (fundingTx.outs[vout].script.toString('hex') !== recipientAddressAsOutputScript){
+            continue;
+          }
+
+          txBuilder.addInput(fundingTxid, vout, 0xffffffff, fundingTx.outs[vout].script);
+          inputValueInSatoshi += fundingTx.outs[vout].value.readUIntBE();
+        }
+      } else {
+        // Get funding UTXOs. These are the inputs of the of the TX. We choose to consume all UTXOs for `fromAddress`.
+        const utxos: UnspentInfo[] = yield self.getUnspentInfoFromExplorer(fromAddress);
+        utxos.forEach(utxo => {
+          txBuilder.addInput(utxo.txid, utxo.n, 0xffffffff, Buffer.from(utxo.script_pub_key.hex, 'hex'));
+          inputValueInSatoshi += utxo.value_int;
+        });
+      }
+
+      // Sanity check. Number.MAX_SAFE_INTEGER = 9007199254740991 ~= 90 mio BTC so this should never happen
+      if (inputValueInSatoshi > Number.MAX_SAFE_INTEGER){
+        throw new Error("Invalid input satoshi amount for omni recovery transaction. Got: " + inputValueInSatoshi.toString());
+      }
+
+      // Add all outputs to the transaction
+      // Add dust output to recipient
+      txBuilder.addOutput(toAddress, self.getDustAmountInSatoshi());
+
+      // Add the omni output. This is the output that follows the Omni protocol
+      // This check sets a limit of max transfer to 90 mio. Omni units (90 mio. USD for Tether).
+      // This limit could be remove by using a JS big number type instead of the native number
+      const unitValue: number = tokenAmount * 1e8;
+      if (unitValue > Number.MAX_SAFE_INTEGER){
+        throw new Error("Cannot handle this big a OMNI token amount: " + tokenAmount.toString());
+      }
+
+      // This snippet was found on https://bitcoin.stackexchange.com/questions/74511/how-to-create-an-omnilayer-transaction-by-myself
+      const simple_send = [
+        "6f6d6e69", // omni
+        "0000",     // version
+        tokenId.toString(16).padStart(12, '0'), // Determines which Omni token is being transferred
+        unitValue.toString(16).padStart(16, '0')
+      ].join('')
+      const data = Buffer.from(simple_send, "hex");
+      const omniOutput = bitcoin.script.compile([
+        bitcoin.opcodes.OP_RETURN,
+        data
+      ]);
+      txBuilder.addOutput(omniOutput, 0)
+
+      // Add change amount to `fromAddress`
+      const feeInSatoshiPerBytes: number = yield self.getRecoveryFeePerBytes();
+
+      // Add dummy-output to get better size when calculating fee. But the signatures are not added yet, so this underestimates the actual size
+      txBuilder.addOutput(fromAddress, 0);
+      const vSizeInVBytes: number = txBuilder.virtualSize();
+      const shouldPayFeeInSatoshi: number = vSizeInVBytes * feeInSatoshiPerBytes;
+      const changeAmountInSatoshi: number = inputValueInSatoshi - self.getDustAmountInSatoshi() - shouldPayFeeInSatoshi;
+      txBuilder.outs[2].amount = changeAmountInSatoshi;
+      if (changeAmountInSatoshi < self.getDustAmountInSatoshi()){
+        throw new Error(`Insufficient BTC funds on ${fromAddress} to handle Omni recovery transaction`);
+      }
+
+      // Sanity check that we didn't mess up fee calculation
+      const outputValue: number = txBuilder.outs.reduce((a, x) => a + x.value, 0);
+      if (outputValue + feeInSatoshiPerBytes !== inputValueInSatoshi){
+        throw new Error("Inconsistent fee amount discovered in transaction:" + JSON.stringify(txBuilder));
+      }
+
+      const unsignedTx: string =  txBuilder.build().toHex();
+
+      return unsignedTx;
     }).call(this);
   }
 }
