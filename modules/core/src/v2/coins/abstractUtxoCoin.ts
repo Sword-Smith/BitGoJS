@@ -1591,7 +1591,18 @@ export abstract class AbstractUtxoCoin extends BaseCoin {
     return response;
   }
 
+  /**
+   * Fetch address status from block explorer
+   * @param addressBase58 The address to fetch information for
+   * @return An object containing the transaction and balance status of this address
+   */
   protected abstract getAddressInfoFromExplorer(address: string): Bluebird<AddressInfo>;
+
+  /**
+   * Get UTXO array for an address
+   * @param addressBase58 The address to fetch UTXOs for
+   * @return UTXO array for input address
+   */
   protected abstract getUnspentInfoFromExplorer(address: string): Bluebird<UnspentInfo[]>;
 
   /**
